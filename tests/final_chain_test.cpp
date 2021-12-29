@@ -1,6 +1,7 @@
 #include "final_chain/final_chain.hpp"
 
 #include <libdevcore/CommonData.h>
+#include <libdevcore/CommonJS.h>
 
 #include <chrono>
 #include <iostream>
@@ -231,6 +232,126 @@ TEST_F(FinalChainTest, contract) {
   }
   // Checking stake of the address how produced all block if rewards are there
   std::cout << get(addr) << std::endl;
+}
+
+TEST_F(FinalChainTest, contract_storage) {
+  // creating random validators
+  std::vector<addr_t> validators;
+  for (int i = 0; i < 50; i++) {
+    validators.push_back(dev::FixedHash<20>::random());
+  }
+  auto sender_keys = dev::KeyPair::create();
+  auto const& addr = sender_keys.address();
+  auto const& sk = sender_keys.secret();
+  cfg.state.genesis_balances = {};
+  cfg.state.genesis_balances[addr] = 1000000000000;
+  for (const auto& acc : validators) {
+    cfg.state.genesis_balances[acc] = 100000;
+  }
+  auto& dpos = cfg.state.dpos.emplace();
+  // new param address of solidity contract, can be precalculated based on author addr
+  dpos.contract_address = dev::right160(dev::sha3(dev::rlpList(addr, 0)));
+  // std::cout << dpos.contract_address << " " << addr << std::endl;
+  dpos.eligibility_balance_threshold = 1;
+  dpos.genesis_state[addr][addr] = dpos.eligibility_balance_threshold;
+  for (const auto& acc : validators) {
+    dpos.genesis_state[acc][acc] = dpos.eligibility_balance_threshold;
+  }
+  init();
+
+  // contract Staking {
+  //   struct DelegationData {
+  //     // Total number of delegated coins
+  //     uint256 delegatedCoins;
+  //     // ??? What is this delegateePercents ?
+  //     uint256 delegateePercents;
+  //     // List of delegators
+  //     IterableMap delegators;
+  //   }
+  //   // Iterable map that is used only together with the _delegators mapping as data holder
+  //   struct IterableMap {
+  //     // map of indexes to the list array
+  //     // indexes are shifted +1 compared to the real indexes of this list, because 0 means non-existing element
+  //     mapping(address => uint256) listIndex;
+  //     // list of addresses
+  //     address[]                   list;
+  //   }
+  //   uint256 a = 1000;
+  //   mapping (address => DelegationData) private _delegators;
+  //   constructor() payable {
+  //    _delegators[address(0x1337)].delegatedCoins = 0x12345;
+  //    _delegators[address(0x1337)].delegateePercents = 0x3000;
+  //    _delegators[address(0x1337)].delegators.list.push(address(0x1234));
+  //    _delegators[address(0x1337)].delegators.list.push(address(0xabcd));
+  //    _delegators[address(0x1337)].delegators.list.push(address(0x12abcdef));
+  //    _delegators[address(0x1337)].delegators.listIndex[address(0x1234567890)] = 0x100011;
+  //   }
+  // }
+  const auto contract_deploy_code =
+      "60806040526103e8600055620123456001600061133773ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffff"
+      "ffffffffffffffffff168152602001908152602001600020600001819055506130006001600061133773ffffffffffffffffffffffffffff"
+      "ffffffffffff1673ffffffffffffffffffffffffffffffffffffffff16815260200190815260200160002060010181905550600160006113"
+      "3773ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff168152602001908152602001"
+      "6000206002016001016112349080600181540180825580915050600190039060005260206000200160009091909190916101000a81548173"
+      "ffffffffffffffffffffffffffffffffffffffff021916908373ffffffffffffffffffffffffffffffffffffffff16021790555060016000"
+      "61133773ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff16815260200190815260"
+      "200160002060020160010161abcd9080600181540180825580915050600190039060005260206000200160009091909190916101000a8154"
+      "8173ffffffffffffffffffffffffffffffffffffffff021916908373ffffffffffffffffffffffffffffffffffffffff1602179055506001"
+      "600061133773ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff1681526020019081"
+      "526020016000206002016001016312abcdef9080600181540180825580915050600190039060005260206000200160009091909190916101"
+      "000a81548173ffffffffffffffffffffffffffffffffffffffff021916908373ffffffffffffffffffffffffffffffffffffffff16021790"
+      "5550621000116001600061133773ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff"
+      "168152602001908152602001600020600201600001600064123456789073ffffffffffffffffffffffffffffffffffffffff1673ffffffff"
+      "ffffffffffffffffffffffffffffffff16815260200190815260200160002081905550603f806103406000396000f3fe6080604052600080"
+      "fdfea2646970667358221220f1eb15179230f9a9b19991b8aa5f9e5aace4aa60ed7b507e81d9d6299c1b972c64736f6c63430008070033";
+
+  Transaction trx(0, 200, 0, 0, dev::fromHex(contract_deploy_code), sk);
+  auto result = advance({trx});
+  auto contract_addr = result->trx_receipts[0].new_contract_address;
+  EXPECT_EQ(contract_addr, dev::right160(dev::sha3(dev::rlpList(addr, 0))));
+  EXPECT_EQ(SUT->get_account_storage(*contract_addr, dev::jsToU256("0x0")), u256(1000));
+
+  const auto delegatedCoins = dev::jsToU256("0x5664844ebadc35481bcbc2762f6a550345f2f1d6274875600d809ff3cd4290ab");
+  const u256 e_delegatedCoins = 0x12345;
+  const auto v_delegatedCoins = SUT->get_account_storage(*contract_addr, delegatedCoins);
+  EXPECT_EQ(e_delegatedCoins, v_delegatedCoins);
+
+  const auto delegateePercents = dev::jsToU256("0x5664844ebadc35481bcbc2762f6a550345f2f1d6274875600d809ff3cd4290ac");
+  const u256 e_delegateePercents = 0x3000;
+  const auto v_delegateePercents = SUT->get_account_storage(*contract_addr, delegateePercents);
+  EXPECT_EQ(e_delegateePercents, v_delegateePercents);
+
+  const auto delegators_listIndex = dev::jsToU256("0x5664844ebadc35481bcbc2762f6a550345f2f1d6274875600d809ff3cd4290ad");
+  // map index stores nothing
+  const u256 e_delegators_listIndex = 0;
+  const auto v_delegators_listIndex = SUT->get_account_storage(*contract_addr, delegators_listIndex);
+  EXPECT_EQ(e_delegators_listIndex, v_delegators_listIndex);
+
+  // array index stores array size
+  const auto delegators_list_size = dev::jsToU256("0x5664844ebadc35481bcbc2762f6a550345f2f1d6274875600d809ff3cd4290ae");
+  const u256 e_delegators_list_size = 0x3;
+  const auto v_delegators_list_size = SUT->get_account_storage(*contract_addr, delegators_list_size);
+  EXPECT_EQ(e_delegators_list_size, v_delegators_list_size);
+
+  const auto array_1 = dev::jsToU256("0xf145b6c48536f77a15cb3c8cd5168c8eb92cb86a11d4c280e12d0f6f7700600b");
+  const u256 e_array_1 = 0xabcd;
+  const auto v_array_1 = SUT->get_account_storage(*contract_addr, array_1);
+  EXPECT_EQ(e_array_1, v_array_1);
+
+  const auto array_0 = dev::jsToU256("0xf145b6c48536f77a15cb3c8cd5168c8eb92cb86a11d4c280e12d0f6f7700600a");
+  const u256 e_array_0 = 0x1234;
+  const auto v_array_0 = SUT->get_account_storage(*contract_addr, array_0);
+  EXPECT_EQ(e_array_0, v_array_0);
+
+  const auto array_2 = dev::jsToU256("0xf145b6c48536f77a15cb3c8cd5168c8eb92cb86a11d4c280e12d0f6f7700600c");
+  const auto e_array_2 = dev::jsToU256("0x12abcdef");
+  const auto v_array_2 = SUT->get_account_storage(*contract_addr, array_2);
+  EXPECT_EQ(e_array_2, v_array_2);
+
+  const auto map_at_1234567890 = dev::jsToU256("0x82d607228e56681fa8865b1c7b3ab6581836ef310c8755c3df0b6a3dcd2fc849");
+  const u256 e_map_at_1234567890 = dev::jsToU256("0x100011");
+  const auto v_map_at_1234567890 = SUT->get_account_storage(*contract_addr, map_at_1234567890);
+  EXPECT_EQ(e_map_at_1234567890, v_map_at_1234567890);
 }
 
 }  // namespace taraxa::final_chain
