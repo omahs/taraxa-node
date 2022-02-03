@@ -62,6 +62,10 @@ const char *devnet_json = R"foo({
           {
             "name": "SUMMARY",
             "verbosity": "INFO"
+          },
+          {
+            "name": "NETPER",
+            "verbosity": "DEBUG"
           }
         ],
         "outputs": [
