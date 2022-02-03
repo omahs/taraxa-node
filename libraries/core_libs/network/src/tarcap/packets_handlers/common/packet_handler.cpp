@@ -34,7 +34,7 @@ void PacketHandler::processPacket(const PacketData& packet_data) {
     packet_stats.processing_duration_ = processing_duration;
     packet_stats.tp_wait_duration_ = tp_wait_duration;
 
-    packets_stats_->addReceivedPacket(peers_state_->node_id_, packet_data.type_str_, packet_stats);
+    packets_stats_->addReceivedPacket(packet_data.type_str_, packet_stats);
 
   } catch (...) {
     handle_read_exception(packet_data);
@@ -80,7 +80,7 @@ bool PacketHandler::sealAndSend(const dev::p2p::NodeID& nodeID, SubprotocolPacke
   host->send(nodeID, TARAXA_CAPABILITY_NAME, packet_type, rlp.invalidate());
 
   SinglePacketStats packet_stats{nodeID, packet_size, std::chrono::microseconds{0}, std::chrono::microseconds{0}};
-  packets_stats_->addSentPacket(peers_state_->node_id_, convertPacketTypeToString(packet_type), packet_stats);
+  packets_stats_->addSentPacket(convertPacketTypeToString(packet_type), packet_stats);
 
   return true;
 }
