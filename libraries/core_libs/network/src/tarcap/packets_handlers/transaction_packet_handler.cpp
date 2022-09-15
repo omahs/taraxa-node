@@ -23,11 +23,9 @@ void TransactionPacketHandler::validatePacketRlpFormat(const PacketData &packet_
 }
 
 inline void TransactionPacketHandler::process(const PacketData &packet_data, const std::shared_ptr<TaraxaPeer> &peer) {
-  std::string received_transactions;
+  std::vector<trx_hash_t> received_transactions;
   const auto transaction_count = packet_data.rlp_.itemCount();
-
-  std::vector<std::pair<std::shared_ptr<Transaction>, TransactionStatus>> transactions;
-  transactions.reserve(transaction_count);
+  received_transactions.reserve(transaction_count);
 
   for (size_t tx_idx = 0; tx_idx < transaction_count; tx_idx++) {
     std::shared_ptr<Transaction> transaction;
@@ -37,11 +35,13 @@ inline void TransactionPacketHandler::process(const PacketData &packet_data, con
     } catch (const Transaction::InvalidSignature &e) {
       throw MaliciousPeerException("Unable to parse transaction: " + std::string(e.what()));
     }
+    const auto trx_hash = transaction->getHash();
+    peer->markTransactionAsKnown(trx_hash);
 
     TransactionStatus status = TransactionStatus::Verified;
     std::string reason;
     if (trx_mgr_) [[likely]] {  // ONLY FOR TESTING
-      if (trx_mgr_->isTransactionKnown(transaction->getHash())) {
+      if (trx_mgr_->isTransactionKnown(trx_hash)) {
         continue;
       }
 
@@ -50,14 +50,14 @@ inline void TransactionPacketHandler::process(const PacketData &packet_data, con
       switch (status) {
         case TransactionStatus::Invalid: {
           std::ostringstream err_msg;
-          err_msg << "DagBlock transaction " << transaction->getHash() << " validation failed: " << reason;
+          err_msg << "DagBlock transaction " << trx_hash << " validation failed: " << reason;
           throw MaliciousPeerException(err_msg.str());
         }
         case TransactionStatus::InsufficentBalance:
         case TransactionStatus::LowNonce: {
           if (peer->reportSuspiciousPacket()) {
             std::ostringstream err_msg;
-            err_msg << "Suspicious packets over the limit on DagBlock transaction " << transaction->getHash()
+            err_msg << "Suspicious packets over the limit on DagBlock transaction " << trx_hash
                     << " validation: " << reason;
             throw MaliciousPeerException(err_msg.str());
           }
@@ -68,31 +68,28 @@ inline void TransactionPacketHandler::process(const PacketData &packet_data, con
         default:
           assert(false);
       }
+      received_trx_count_++;
+      if (trx_mgr_->insertValidatedTransaction({std::move(transaction), std::move(status)})) {
+        unique_received_trx_count_++;
+      }
+    } else {
+      // Only for unit tests
+      onNewTransactions({{std::move(transaction), std::move(status)}});
     }
-    received_transactions += transaction->getHash().abridged() + " ";
-    peer->markTransactionAsKnown(transaction->getHash());
-    transactions.push_back({std::move(transaction), std::move(status)});
+    received_transactions.push_back(trx_hash);
   }
 
   if (transaction_count > 0) {
     LOG(log_tr_) << "Received TransactionPacket with " << packet_data.rlp_.itemCount() << " transactions";
-    if (transactions.size() > 0) {
-      LOG(log_dg_) << "Received TransactionPacket with " << transactions.size()
+    if (received_transactions.size() > 0) {
+      LOG(log_dg_) << "Received TransactionPacket with " << received_transactions.size()
                    << " unseen transactions:" << received_transactions << " from: " << peer->getId().abridged();
     }
-
-    onNewTransactions(std::move(transactions));
   }
 }
 
 void TransactionPacketHandler::onNewTransactions(
     std::vector<std::pair<std::shared_ptr<Transaction>, TransactionStatus>> &&transactions) {
-  if (trx_mgr_) [[likely]] {
-    received_trx_count_ += transactions.size();
-    unique_received_trx_count_ += trx_mgr_->insertValidatedTransactions(std::move(transactions));
-    return;
-  }
-
   // Only for testing
   for (auto const &trx : transactions) {
     auto trx_hash = trx.first->getHash();
