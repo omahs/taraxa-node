@@ -117,7 +117,7 @@ std::pair<bool, std::vector<blk_hash_t>> DagManager::pivotAndTipsAvailable(DagBl
   }
 
   if (expected_level != blk.getLevel()) {
-    LOG(log_nf_) << "DAG Block " << dag_blk_hash << " level " << blk.getLevel()
+    LOG(log_er_) << "DAG Block " << dag_blk_hash << " level " << blk.getLevel()
                  << ", expected level: " << expected_level;
     return {false, missing_tips_or_pivot};
   }
@@ -572,6 +572,22 @@ std::pair<size_t, size_t> DagManager::getNonFinalizedBlocksSize() const {
 
 DagManager::VerifyBlockReturnType DagManager::verifyBlock(const DagBlock &blk) {
   const auto &block_hash = blk.getHash();
+
+  // Verify tips/pivot count amd uniqueness
+  std::unordered_set<blk_hash_t> unique_tips_pivot;
+
+  unique_tips_pivot.insert(blk.getPivot());
+  for (auto const &tip : blk.getTips()) {
+    if (!unique_tips_pivot.insert(tip).second) {
+      LOG(log_er_) << "DAG Block " << block_hash << " tip " << tip << " duplicate";
+      return VerifyBlockReturnType::FailedTipsVerification;
+    }
+  }
+  if (blk.getTips().size() > kDagBlockMaxTips) {
+    LOG(log_er_) << "DAG Block " << block_hash << " tips count " << blk.getTips().size() << " over the limit";
+    return VerifyBlockReturnType::FailedTipsVerification;
+  }
+
   // Verify transactions
   auto transactions = trx_mgr_->getBlockTransactions(blk);
   if (!transactions.has_value()) {
